@@ -1,0 +1,126 @@
+---
+title: "Tracker Radar Exploration"
+output: html_notebook
+---
+
+This is an [Tracker Radar](https://spreadprivacy.com/duckduckgo-tracker-radar/) data set from DuckDuckGo. The [data model is documented on Github](https://github.com/duckduckgo/tracker-radar/blob/master/docs/DATA_MODEL.md).
+
+## Setup
+
+```{r setup}
+
+library(tidyverse)
+library(scales)
+library(jsonlite)
+
+```
+
+## Load Up the Data
+
+Domain data included:
+
+* **Prevalence** – The percentage of the sites in DuckDuckGo's crawl that request this third-party domain.
+* **Sites** – The actual count of sites this domain was found on in DuckDuckGo's crawl.
+* **Categories** – High-level reasons for using this domain as a third party.
+* **Fingerprinting** – How likely this domain is to be using fingerprinting techniques as a third party: 
+  0 = no use of browser APIs
+  1 = some use of browser APIs, but not obviously for tracking purposes
+  2 = use of many browser APIs, possibly for tracking purposes
+  3 = excessive use of browser APIs, almost certainly for tracking purposes
+* **Cookies** – The percentage of the sites in DuckDuckGo's crawl that have cookies set by this third-party domain.
+* **Performance** – Impact of loading resources from this domain. Each of these fields is assigned a value from 1-3, where 1 is little to no performance impact, and 3 is high impact. The delta between values representing an order of magnitude difference.
+* **Owner** – Parent entity.
+* **Resources** – Scripts, pixels, and other common resources this domain uses.
+* **Subdomains** – Subdomains these resources may be found on.
+
+```{r load_data}
+
+domain_list <- list.files("domains")
+
+get_domain_data <- function(domain_name){
+  
+  # cat(domain_name, "\n")
+  
+  # Read in the File
+  domain_data <- read_json(paste0("domains/", domain_name))
+  
+    # Extract data from the JSOn
+  df <- data.frame(domain = domain_data$domain,
+                   owner = ifelse(is.null(domain_data$owner$displayName), 
+                                  NA, domain_data$owner$displayName),
+                   prevalence = domain_data$prevalence,
+                   sites = domain_data$sites,
+                   fingerprinting = domain_data$fingerprinting,
+                   cookies = domain_data$cookies,
+                   performance_time = ifelse(is.null(domain_data$performance$time),
+                                             NA, domain_data$performance$time),
+                   performance_size = ifelse(is.null(domain_data$performance$size),
+                                             NA, domain_data$performance$size),
+                   performance_cpu = ifelse(is.null(domain_data$performance$cpu),
+                                            NA, domain_data$performance$cpu),
+                   performance_cache = ifelse(is.null(domain_data$performance$cache),
+                                              NA, domain_data$performance$cache),
+                   stringsAsFactors = FALSE)
+  
+  # Get the number of categories
+  num_categories <- unlist(domain_data$categories) %>% length()
+  
+  # Create one row for each category, repeating all of the above information
+  if(num_categories == 0){
+    df$categories <- "Uncategorized"
+  } else {
+    df <- df %>% uncount(num_categories)
+    df$categories <- unlist(domain_data$categories)
+  }
+  
+  # Return the data frame
+  df
+}
+
+# Get the data for all of the files
+domain_data <- map_dfr(domain_list, get_domain_data)
+
+```
+
+## What are the most prevalent domains?
+
+```{r most prevalent}
+
+most_prevalent <- domain_data %>% select(-categories) %>% 
+  distinct() %>% arrange(-prevalence)
+
+head(most_prevalent, 25)
+
+```
+
+## Top 10 (by Prevalence) for Each Category
+
+```{r top_10, fig.height = 8, fig.width = 8}
+
+top_by_category <- domain_data %>% 
+  group_by(categories) %>% top_n(5, prevalence) %>% ungroup() %>%  
+  arrange(categories, prevalence) %>% 
+  # This is for ordering things as we'd like
+  # See: https://drsimonj.svbtle.com/ordering-categories-within-ggplot2-facets
+  mutate(order = row_number()) %>% 
+  select(order, categories, domain, owner, prevalence, fingerprinting, cookies) %>% 
+  # Make a unique key that we can then turn into a factor to control the ordering
+  mutate(domain_cat = paste0(domain, "|", categories)) %>% 
+  mutate(domain_cat = factor(domain_cat))
+
+gg <- ggplot(top_by_category, aes(x = order, y = prevalence, label = percent(prevalence, 0.1))) +
+  geom_bar(stat = "identity") +
+  geom_text(mapping = aes(y = prevalence + .09)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0, max(top_by_category$prevalence + 0.12))) +
+  # Add categories to axis
+  scale_x_continuous(breaks = top_by_category$order, labels = top_by_category$domain, expand = c(0,0)) +
+  facet_grid(rows = vars(categories), scales = "free_y") +
+  # facet_wrap(~ categories, scales = "free") +
+    coord_flip() + 
+  theme_light()
+
+gg
+
+```
+```
+
