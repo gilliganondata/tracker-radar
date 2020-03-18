@@ -12,6 +12,22 @@ This is an [Tracker Radar](https://spreadprivacy.com/duckduckgo-tracker-radar/) 
 library(tidyverse)
 library(scales)
 library(jsonlite)
+library(patchwork)
+
+theme_bar <- theme_minimal() +
+  theme(plot.title.position = "plot",
+        plot.title = element_text(size = 14, face = "bold", color = "gray10"),
+        plot.subtitle = element_text(size = 12, face = "italic", 
+                                     margin = margin(0, 0, 12, 0, "pt")),
+        plot.caption = element_text(face = "italic", size = 11, lineheight = 1.1, color = "gray40"),
+        axis.title = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 12), 
+        panel.grid = element_blank(),
+        panel.spacing = unit(1, "lines"),
+        strip.text = element_text(size = 12, face = "bold", vjust = 1, hjust = 0),
+        strip.text.y.left = element_text(angle = 0),
+        strip.placement = "outside")
 
 ```
 
@@ -23,10 +39,10 @@ Domain data included:
 * **Sites** – The actual count of sites this domain was found on in DuckDuckGo's crawl.
 * **Categories** – High-level reasons for using this domain as a third party.
 * **Fingerprinting** – How likely this domain is to be using fingerprinting techniques as a third party: 
-  0 = no use of browser APIs
-  1 = some use of browser APIs, but not obviously for tracking purposes
-  2 = use of many browser APIs, possibly for tracking purposes
-  3 = excessive use of browser APIs, almost certainly for tracking purposes
+0 = no use of browser APIs
+1 = some use of browser APIs, but not obviously for tracking purposes
+2 = use of many browser APIs, possibly for tracking purposes
+3 = excessive use of browser APIs, almost certainly for tracking purposes
 * **Cookies** – The percentage of the sites in DuckDuckGo's crawl that have cookies set by this third-party domain.
 * **Performance** – Impact of loading resources from this domain. Each of these fields is assigned a value from 1-3, where 1 is little to no performance impact, and 3 is high impact. The delta between values representing an order of magnitude difference.
 * **Owner** – Parent entity.
@@ -44,7 +60,7 @@ get_domain_data <- function(domain_name){
   # Read in the File
   domain_data <- read_json(paste0("domains/", domain_name))
   
-    # Extract data from the JSOn
+  # Extract data from the JSOn
   df <- data.frame(domain = domain_data$domain,
                    owner = ifelse(is.null(domain_data$owner$displayName), 
                                   NA, domain_data$owner$displayName),
@@ -93,11 +109,44 @@ head(most_prevalent, 25)
 
 ```
 
-## Top 10 (by Prevalence) for Each Category
+## What Types (Categories) of Trackers Were Captured?
 
-```{r top_10, fig.height = 8, fig.width = 8}
+```{r cat_num, fig.height = 6, echo = FALSE}
 
+# Get the number of domains for each category and build a plot
+domains_with_categories <- domain_data %>% 
+  filter(categories != "Uncategorized") %>% 
+  group_by(categories) %>% summarise(n = n()) %>% 
+  arrange(n) 
+
+# Need this for the next section: top 5 categories
+top_5_cats <- top_n(domains_with_categories, 5, n) %>% arrange(-n)
+
+domains_with_categories$categories <- factor(domains_with_categories$categories, 
+                                             levels = domains_with_categories$categories)
+
+uncat <- domain_data %>% filter(categories == "Uncategorized") %>% nrow()
+
+gg_domain_w_categories <- ggplot(domains_with_categories, aes(x = categories, y = n, label = format(n, big.mark = ","))) + 
+  geom_bar(stat = "identity", fill = "#58b792") + 
+  geom_hline(aes(yintercept = 0)) +
+  geom_text(aes(y = n + 2), hjust = 0, size = 4, color = "gray40") +
+  
+  scale_y_continuous(limits = c(0, 400), expand = c(0,0)) +
+  labs(title = "Number of Detected Third Party Domains by Category",
+       subtitle = paste0("(", format(uncat, big.mark = ","), " Uncategorized Domains Not Shown)"),
+       caption = "Source: DuckDuckGo Tracker Radar\nCategory Descriptions: http://bit.ly/tr-categories") +
+  coord_flip() +
+  theme_bar
+
+
+# Get the top 5 domains for each of the top 5 categories and show their prevalence  
 top_by_category <- domain_data %>% 
+  filter(categories %in% top_5_cats$categories) %>% 
+  mutate(categories = ifelse(categories == "Ad Motivated Tracking", "Ad Motivated\nTracking",
+                             ifelse(categories == "Audience Measurement", "Audience\nMeasurement",
+                                    ifelse(categories == "Third-Party Analytics Marketing", 
+                                           "Third-Party\nAnalytics Marketing", categories)))) %>% 
   group_by(categories) %>% top_n(5, prevalence) %>% ungroup() %>%  
   arrange(categories, prevalence) %>% 
   # This is for ordering things as we'd like
@@ -108,19 +157,28 @@ top_by_category <- domain_data %>%
   mutate(domain_cat = paste0(domain, "|", categories)) %>% 
   mutate(domain_cat = factor(domain_cat))
 
-gg <- ggplot(top_by_category, aes(x = order, y = prevalence, label = percent(prevalence, 0.1))) +
-  geom_bar(stat = "identity") +
-  geom_text(mapping = aes(y = prevalence + .09)) +
+gg_top_by_cat <- ggplot(top_by_category, aes(x = order, y = prevalence, label = percent(prevalence, 0.1))) +
+  geom_bar(stat = "identity", fill = "#678fff") +
+  geom_text(mapping = aes(y = prevalence + .04), size = 4, color = "gray40") +
   scale_y_continuous(expand = c(0,0), limits = c(0, max(top_by_category$prevalence + 0.12))) +
   # Add categories to axis
   scale_x_continuous(breaks = top_by_category$order, labels = top_by_category$domain, expand = c(0,0)) +
-  facet_grid(rows = vars(categories), scales = "free_y") +
+  labs(title = "Prevalence of the Top 5 Domains in the Top 5 Categories",
+       subtitle = "Prevalence = The % of the ~43,000 Inspected Sites on Which the 3rd Party Domain Was Found",
+       caption = "Source: DuckDuckGo Tracker Radar") +
+  
+  facet_grid(rows = vars(categories), scales = "free_y", switch = "y") +
   # facet_wrap(~ categories, scales = "free") +
-    coord_flip() + 
-  theme_light()
+  coord_flip() + 
+  theme_bar
 
-gg
+gg_domain_w_categories
+gg_top_by_cat
+
 
 ```
+
+
+
 ```
 
